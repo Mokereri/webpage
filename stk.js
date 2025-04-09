@@ -1,0 +1,206 @@
+const express = require('express');
+const axios = require('axios');
+const bodyParser = require('body-parser');
+const path = require('path');
+
+const app = express();
+app.use(bodyParser.json());
+app.use(express.static(__dirname)); // Serve static files like CSS
+
+const MPESA_SHORTCODE = "174379"; // Replace with your Paybill/Till Number
+const MPESA_PASSKEY = "your_passkey_here"; 
+const CONSUMER_KEY = "your_consumer_key";
+const CONSUMER_SECRET = "your_consumer_secret";
+const CALLBACK_URL = "https://your-server.com/callback"; 
+
+async function getMpesaToken() {
+    const response = await axios.get("https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials", {
+        auth: { username: CONSUMER_KEY, password: CONSUMER_SECRET }
+    });
+    return response.data.access_token;
+}
+
+app.post('/mpesa-stk-push', async (req, res) => {
+    try {
+        const { phone, amount } = req.body;
+        const token = await getMpesaToken();
+
+        const timestamp = new Date().toISOString().replace(/[-:TZ]/g, "");
+        const password = Buffer.from(`${MPESA_SHORTCODE}${MPESA_PASSKEY}${timestamp}`).toString("base64");
+
+        const response = await axios.post("https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest", {
+            BusinessShortCode: MPESA_SHORTCODE,
+            Password: password,
+            Timestamp: timestamp,
+            TransactionType: "CustomerPayBillOnline",
+            Amount: amount,
+            PartyA: phone,
+            PartyB: MPESA_SHORTCODE,
+            PhoneNumber: phone,
+            CallBackURL: CALLBACK_URL,
+            AccountReference: "Support Donation",
+            TransactionDesc: "Support Us Payment"
+        }, { headers: { Authorization: `Bearer ${token}` } });
+
+        res.json({ message: "STK Push sent. Please check your phone.", response: response.data });
+    } catch (error) {
+        res.status(500).json({ message: "Failed to process payment", error: error.message });
+    }
+});
+
+// Serve HTML Page
+app.get("/", (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Support Us</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                text-align: center;
+                margin: 50px;
+            }
+            .support-btn {
+                background-color: #4CAF50;
+                color: white;
+                padding: 15px 20px;
+                border: none;
+                cursor: pointer;
+                font-size: 18px;
+                border-radius: 5px;
+            }
+            .support-btn:hover {
+                background-color: #45a049;
+            }
+            .popup {
+                display: none;
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: white;
+                padding: 20px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+                border-radius: 8px;
+                text-align: center;
+            }
+            .popup-content {
+                display: flex;
+                flex-direction: column;
+                gap: 15px;
+            }
+            .payment-option, .close-btn {
+                background-color: #003366;
+                color: white;
+                padding: 10px;
+                border: none;
+                cursor: pointer;
+                border-radius: 5px;
+            }
+            .payment-option:hover, .close-btn:hover {
+                background-color: #002244;
+            }
+            input {
+                padding: 8px;
+                width: 100%;
+                margin-top: 5px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }
+        </style>
+    </head>
+    <body>
+
+        <button class="support-btn" onclick="openPopup()">Support Us</button>
+
+        <div id="payment-popup" class="popup">
+            <div class="popup-content">
+                <h2>Choose Payment Method</h2>
+                <button class="payment-option" onclick="payWithMpesa()">Mpesa</button>
+                <button class="payment-option" onclick="payWithPayPal()">PayPal</button>
+                <button class="payment-option" onclick="payWithCard()">Card</button>
+                <button class="close-btn" onclick="closePopup()">Cancel</button>
+            </div>
+        </div>
+
+        <div id="mpesa-popup" class="popup">
+            <div class="popup-content">
+                <h2>Mpesa Payment</h2>
+                <label>Enter Your Phone Number:</label>
+                <input type="tel" id="mpesa-phone" placeholder="e.g. 07XXXXXXXX">
+                <label>Enter Amount:</label>
+                <input type="number" id="mpesa-amount" placeholder="Enter amount">
+                <button onclick="processMpesa()">Next</button>
+                <button class="close-btn" onclick="closeMpesaPopup()">Cancel</button>
+            </div>
+        </div>
+
+        <script>
+            function openPopup() {
+                document.getElementById("payment-popup").style.display = "block";
+            }
+
+            function closePopup() {
+                document.getElementById("payment-popup").style.display = "none";
+            }
+
+            function payWithMpesa() {
+                document.getElementById("payment-popup").style.display = "none";
+                document.getElementById("mpesa-popup").style.display = "block";
+            }
+
+            function closeMpesaPopup() {
+                document.getElementById("mpesa-popup").style.display = "none";
+            }
+
+            async function processMpesa() {
+                let phone = document.getElementById("mpesa-phone").value.trim();
+                let amount = document.getElementById("mpesa-amount").value.trim();
+
+                if (!phone.match(/^07\\d{8}$/)) {
+                    alert("Please enter a valid phone number (07XXXXXXXX).");
+                    return;
+                }
+
+                if (amount === "" || amount <= 0) {
+                    alert("Please enter a valid amount.");
+                    return;
+                }
+
+                alert(\`Sending STK Push to \${phone} for Ksh \${amount}...\`);
+                
+                try {
+                    let response = await fetch('/mpesa-stk-push', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone, amount })
+                    });
+
+                    let result = await response.json();
+                    alert(result.message);
+                } catch (error) {
+                    alert("Payment request failed. Please try again.");
+                }
+
+                closeMpesaPopup();
+            }
+
+            function payWithPayPal() {
+                window.location.href = "https://www.paypal.com/donate/?business=mokererikelvin2017@gmail.com";
+            }
+
+            function payWithCard() {
+                alert("Redirecting to card payment...");
+                window.location.href = "https://your-payment-gateway.com/card-payment?card=4599060025178912";
+            }
+        </script>
+
+    </body>
+    </html>
+    `);
+});
+
+app.listen(3000, () => console.log("Server running on port 3000"));
